@@ -1,0 +1,171 @@
+---
+title: "Analysis on the LNP-mRNA model"
+author: "Yuezhe Li"
+date: "6/15/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup
+
+```{r pressure, echo=FALSE}
+rm(list = ls())
+gc()
+
+setwd(dirname(rstudioapi::getSourceEditorContext()$path)) # set the working directory at the folder that contains the script
+
+# load required packages
+library(tidyverse)
+library(mrgsolve)
+library(gridExtra)
+library(grid)
+library(mrggsave)
+
+
+wt_mus = 32/1000 # based on male mouse weight = 31g from Christensen et al., 2014
+
+dose = 2.5 # dose = 2.5mg/ kg
+
+MW = 5.8E-2
+```
+
+# Observed data 
+
+Data from Chirstensen et al., 2014
+https://pubmed.ncbi.nlm.nih.gov/24389421/
+
+```{r}
+christensen2014 <-  read.csv(file = 'data/Christensen2014_Fig2.csv', header = TRUE)
+```
+
+# Simulation test
+
+```{r}
+# use the model that is most similar to the original liposomal model
+mod0 <- mread("PBPK_LIP0") 
+
+# use the model that gets rid of the limits in liver & spleen environmental limit
+mod1 <- mread("PBPK_LIP1")
+
+sim0 <- mod0 %>% 
+  # set up initial dose
+  init(A_pl_LIP = wt_mus * dose) %>%
+  param(wt = wt_mus) %>% mrgsim(delta = 0.05, end = 168) %>% as.tibble() %>% filter(time > 0.5)
+
+sim1 <- mod1 %>% 
+  # set up initial dose
+  init(A_pl_LIP = wt_mus * dose) %>%
+  param(wt = wt_mus) %>% mrgsim(delta = 0.05, end = 168) %>% as.tibble() %>% filter(time > 0.5)
+
+porgan <- ggplot() + 
+  geom_line(data = sim0, aes(x = time, y = (C_sp + C_sp_vas_LIP + C_sp_exv_LIP)/MW, col = "spleen v0")) + 
+  geom_line(data = sim0, aes(x = time, y = (C_li + C_li_vas_LIP + C_li_exv_LIP)/MW, col = "liver, v0")) + 
+  geom_line(data = sim0, aes(x = time, y = (C_kd + C_kd_vas_LIP + C_kd_exv_LIP)/MW, col = "kidney, v0")) + 
+  geom_line(data = sim1, aes(x = time, y = (C_sp + C_sp_vas_LIP + C_sp_exv_LIP)/MW, col = "spleen, v1")) + 
+  geom_line(data = sim1, aes(x = time, y = (C_li + C_li_vas_LIP + C_li_exv_LIP)/MW, col = "liver, v1")) + 
+  geom_line(data = sim1, aes(x = time, y = (C_kd + C_kd_vas_LIP + C_kd_exv_LIP)/MW, col = "kidney, v1")) + 
+  geom_point(data = christensen2014 %>% filter(type == "liver"), aes(x = time, y = conc, col = "Christensen et al., 2014, liver")) + 
+  geom_point(data = christensen2014 %>% filter(type == "kidney"), aes(x = time, y = conc, col = "Christensen et al., 2014, kidney")) + 
+  geom_point(data = christensen2014 %>% filter(type == "spleen"), aes(x = time, y = conc, col = "Christensen et al., 2014, spleen")) + 
+  theme_bw() + theme(legend.position = "bottom") + 
+  scale_x_continuous(breaks = c(0, 42, 84, 126, 168)) + 
+  scale_y_continuous(trans='log10', limits=c(1e-4, 1e4)) + 
+  labs(x = "time (h)", y = "concentration (nM)", col = "")
+
+pplasma <- ggplot() + 
+  geom_line(data = sim0, aes(x = time, y = (C_pl + C_pl_LIP)/MW, col = "blood, v0")) + 
+  geom_line(data = sim1, aes(x = time, y = (C_pl + C_pl_LIP)/MW, col = "blood, v1")) + 
+  geom_point(data = christensen2014 %>% filter(type == "plasma"), aes(x = time, y = conc, col = "Christensen et al., 2014, plasma")) + 
+  theme_bw() + theme(legend.position = "bottom") + 
+  scale_x_continuous(breaks = c(0, 42, 84, 126, 168)) + 
+  scale_y_continuous(trans='log10', limits=c(1e-4, 1e4)) + 
+  labs(x = "time (h)", y = "concentration (nM)", col = "")
+
+grid.arrange(pplasma, porgan, ncol = 1)
+```
+
+
+```{r}
+porgan1 <- ggplot() + 
+  geom_line(data = sim0, aes(x = time, y = (C_sp + C_sp_vas_LIP + C_sp_exv_LIP)/MW, col = "spleen")) + 
+  geom_line(data = sim0, aes(x = time, y = (C_li + C_li_vas_LIP + C_li_exv_LIP)/MW, col = "liver")) + 
+  geom_line(data = sim0, aes(x = time, y = (C_kd + C_kd_vas_LIP + C_kd_exv_LIP)/MW, col = "kidney")) + 
+  geom_point(data = christensen2014 %>% filter(type == "liver"), aes(x = time, y = conc, col = "Christensen et al., 2014, liver")) + 
+  geom_point(data = christensen2014 %>% filter(type == "kidney"), aes(x = time, y = conc, col = "Christensen et al., 2014, kidney")) + 
+  geom_point(data = christensen2014 %>% filter(type == "spleen"), aes(x = time, y = conc, col = "Christensen et al., 2014, spleen")) + 
+  theme_bw() + theme(legend.position = "bottom") + 
+  scale_x_continuous(breaks = c(0, 42, 84, 126, 168)) + 
+  scale_y_continuous(trans='log10', limits=c(1e-4, 1e4)) + 
+  labs(x = "time (h)", y = "concentration (nM)", col = "")
+
+pplasma1 <- ggplot() + 
+  geom_line(data = sim0, aes(x = time, y = (C_pl + C_pl_LIP)/MW, col = "blood")) + 
+  geom_point(data = christensen2014 %>% filter(type == "plasma"), aes(x = time, y = conc, col = "Christensen et al., 2014, plasma")) + 
+  theme_bw() + theme(legend.position = "bottom") + 
+  scale_x_continuous(breaks = c(0, 42, 84, 126, 168)) + 
+  scale_y_continuous(trans='log10', limits=c(1e-4, 1e4)) + 
+  labs(x = "time (h)", y = "concentration (nM)", col = "")
+
+grid.arrange(pplasma1, porgan1, ncol = 1)
+```
+# Test 2
+
+Test a new version of the model. 
+
+
+Problems with the model:
+1. no renal clearance
+2. clearance from tissue unknown
+3. lacks siRNA metabolism difference
+4. blood & plasma difference
+
+```{r}
+mod2 <- mread("PBPK_LIP2") %>% 
+  # parameter change based on siRNA-LNP half life
+  param(CLplasma = log(2)/162) %>%
+  param(CLtissue = log(2)/162) %>%
+  param(UPgi = 0, UPsp = 0, UPli = 0, UPrm = 0)
+
+sim2 <- mod2 %>% 
+  # set up initial dose
+  init(A_pl_LIP = wt_mus * dose * 4) %>%
+  param(wt = wt_mus) %>% mrgsim(delta = 0.05, end = 168) %>% as.tibble() %>% filter(time > 0.5)
+
+
+pspleen2 <- ggplot() + 
+  geom_line(data = sim2, aes(x = time, y = (C_sp_vas_LIP + C_sp_exv_LIP)/MW, col = "spleen")) + 
+  geom_point(data = christensen2014 %>% filter(type == "spleen"), aes(x = time, y = conc, col = "Christensen et al., 2014, spleen")) + 
+  theme_bw() + 
+  scale_x_continuous(breaks = c(0, 42, 84, 126, 168)) + 
+  #scale_y_continuous(trans='log10', limits=c(1e-1, 1e4)) + 
+  labs(x = "time (h)", y = "concentration (nM)", col = "")
+
+pliver2 <- ggplot() + 
+  geom_line(data = sim2, aes(x = time, y = (C_li_vas_LIP + C_li_exv_LIP)/MW, col = "liver")) + 
+  geom_point(data = christensen2014 %>% filter(type == "liver"), aes(x = time, y = conc, col = "Christensen et al., 2014, liver")) + 
+  theme_bw() + 
+  scale_x_continuous(breaks = c(0, 42, 84, 126, 168)) + 
+  #scale_y_continuous(trans='log10', limits=c(1e-1, 1e4)) + 
+  labs(x = "time (h)", y = "concentration (nM)", col = "")
+
+pkidney2 <- ggplot() + 
+  geom_line(data = sim2, aes(x = time, y = (C_kd_vas_LIP + C_kd_exv_LIP)/MW, col = "kidney")) + 
+  geom_point(data = christensen2014 %>% filter(type == "kidney"), aes(x = time, y = conc, col = "Christensen et al., 2014, kidney")) + 
+  theme_bw() + 
+  scale_x_continuous(breaks = c(0, 42, 84, 126, 168)) + 
+  #scale_y_continuous(trans='log10', limits=c(1e-1, 1e4)) + 
+  labs(x = "time (h)", y = "concentration (nM)", col = "")
+
+pplasma2 <- ggplot() + 
+  geom_line(data = sim2, aes(x = time, y = (C_pl_LIP)/MW, col = "blood")) + 
+  geom_point(data = christensen2014 %>% filter(type == "plasma"), aes(x = time, y = conc, col = "Christensen et al., 2014, plasma")) + 
+  theme_bw() + # theme(legend.position = "bottom") + 
+  scale_x_continuous(breaks = c(0, 42, 84, 126, 168)) + 
+  #scale_y_continuous(trans='log10', limits=c(1e-1, 1e4)) + 
+  labs(x = "time (h)", y = "concentration (nM)", col = "")
+
+grid.arrange(pplasma2, pspleen2, pliver2, pkidney2, ncol = 1)
+```

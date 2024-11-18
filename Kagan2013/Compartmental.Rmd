@@ -1,0 +1,127 @@
+---
+title: "Analysis on the LNP-mRNA model"
+author: "Yuezhe Li"
+date: "4/19/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup
+
+```{r pressure, echo=FALSE}
+rm(list = ls())
+gc()
+
+setwd(dirname(rstudioapi::getSourceEditorContext()$path)) # set the working directory at the folder that contains the script
+
+# load required packages
+library(tidyverse)
+library(mrgsolve)
+library(gridExtra)
+library(grid)
+library(mrggsave)
+
+# read in PBPK model
+mod <- mread("Compartmental") 
+```
+
+# Observed data 
+
+```{r}
+# read in the observed fungizone data; rat, dose = 0.8mg/kg
+fungizone_rat <- read.csv(file = 'data/Fig3b.csv', header = TRUE)
+
+# read in the observed AmBisome data; rat, dose = 20mg/kg
+AmB_rat_nonlip <- read.csv(file = 'data/Fig3d.csv', header = TRUE) %>% filter(type == "nonliposomal") %>% select(time, conc)
+AmB_rat_tot <- read.csv(file = 'data/Fig3d.csv', header = TRUE) %>% filter(type == "total") %>% select(time, conc)
+```
+
+# Fungizone
+
+```{r}
+sim0 <- mod %>% param(FR = 100) %>% mrgsim(delta = 0.05, end = 96) %>% as.tibble()
+
+rat_nonlip <- ggplot(data = sim0, aes(x = time)) + 
+  geom_line(aes(y = C_nonlip_AmB, col = "nonliposomal")) + 
+  geom_line(data = fungizone_rat, aes(y = conc, col = 'Kagan et al., 2013'), linetype = "dashed", size=2, alpha = 0.5) + 
+  labs(y = 'AmB conc (mg/L)', x = 'time (h)', color = ' ') + 
+  theme_bw() + # theme(legend.position = "bottom") + 
+  scale_y_continuous(trans='log10', limits = c(0.005, 10))
+
+print(rat_nonlip)
+```
+
+# AmBisome
+
+```{r}
+sim1 <- mod %>% param(dose = 20) %>% mrgsim(delta = 0.05, end = 24) %>% as.tibble()
+
+rat_AmB <- ggplot(data = sim1, aes(x = time)) + 
+  geom_line(aes(y = C_nonlip_AmB, col = "nonliposomal")) + 
+  geom_line(aes(y = C_AmB, col = "total")) + 
+  geom_line(data = AmB_rat_nonlip, aes(y = conc, col = 'Kagan et al., 2013, nonliposomal'), linetype = "dashed", size=2, alpha = 0.5) + 
+  geom_line(data = AmB_rat_tot, aes(y = conc, col = 'Kagan et al., 2013, total'), linetype = "dashed", size=2, alpha = 0.5) + 
+  labs(y = 'AmB conc (mg/L)', x = 'time (h)', color = ' ') + 
+  theme_bw() + # theme(legend.position = "bottom") + 
+  scale_y_continuous(trans='log10', limits = c(0.05, 1000))
+
+print(rat_AmB)
+```
+
+# Save figure
+
+```{r}
+png('img/compartmental_verify_rat.png', width = 1200, height = 400, res = 100)
+grid.arrange(rat_nonlip, rat_AmB, ncol = 2)
+dev.off()
+```
+
+# human compartmental model
+
+```{r}
+## update parameters
+
+HomoParam <- list(
+  FR = 8.16,
+  krelease = 3.53e-3, 
+  wt = 70,  # human weight = 70kg
+  dose = 2, # dose = 2 mg.kg-1; 2h infusion
+  V_c= 4.47e-2, # unit: L.kg-1
+  k12 = 7.28e-2, 
+  k21 = 2.76e-2, 
+  kel = 3.32e-2,
+  L_V_c = 8.85e-2, # unit: L.kg-1
+  L_k12 = 3.78e-2, 
+  L_k21 = 8.5e-3,
+  L_kel = 7.98e-2 
+)
+
+## simulation, Fungisome
+homo_fungizone <- mod %>% param(HomoParam) %>% param(dose = 0.6) %>% mrgsim(delta = 0.1, end = 120) %>% as.tibble()
+
+## simulation, AmBisome
+homo_ambisome <- mod %>% param(HomoParam) %>% mrgsim(delta = 0.1, end = 168) %>% as.tibble()
+
+
+### note the initial value is flawed, thus this figure is not added as a validational figure
+### To correct the problem, the source code is required to change
+
+hfungizone <- ggplot(data = homo_fungizone, aes(x = time)) + 
+  geom_line(aes(y = C_nonlip_AmB, col = "nonliposomal")) + 
+  labs(y = 'AmB conc (mg/L)', x = 'time (h)', color = ' ') + 
+  theme_bw() +  theme(legend.position = "bottom") + 
+  scale_y_continuous(trans='log10', limits = c(0.1, 10))
+
+
+hambisome <- ggplot(data = homo_ambisome, aes(x = time)) + 
+  # geom_line(aes(y = C_nonlip_AmB, col = "nonliposomal")) + 
+  geom_line(aes(y = C_AmB, col = "total")) + 
+  labs(y = 'AmB conc (mg/L)', x = 'time (h)', color = ' ') + 
+  theme_bw() +  theme(legend.position = "bottom") + 
+  scale_y_continuous(trans='log10', limits = c(0.1, 100))
+
+grid.arrange(hfungizone, hambisome, ncol = 2)
+```

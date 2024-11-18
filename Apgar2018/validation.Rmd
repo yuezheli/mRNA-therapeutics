@@ -1,0 +1,90 @@
+---
+title: "Analysis on the LNP-mRNA model"
+author: "Yuezhe Li"
+date: "4/19/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup
+
+```{r pressure, echo=FALSE}
+rm(list = ls())
+gc()
+
+setwd(dirname(rstudioapi::getSourceEditorContext()$path)) # set the working directory at the folder that contains the script
+
+# load required packages
+library(tidyverse)
+library(mrgsolve)
+library(gridExtra)
+library(grid)
+library(mrggsave)
+library(sensitivity)
+library(PKPDmisc)
+library(mrgsim.parallel)
+
+set.seed(88771) 
+
+mod <- mread("model1") 
+```
+
+# Steady state
+
+```{r}
+# run the model to steady state
+
+# mod %>% param(dosing = 0, ktbg = 0, ksyn = 0.0257) %>% mrgsim(end = 60*60*24*30) %>% plot_sims(.f = LNP + TotalBilirubin + BilirubinBlood + UGTc + sBil + BiliProd ~ time/(60*60*24))
+ksyn_idata = seq(1e-3, 3e-3, 1e-4)
+
+ss = mod %>% param(dosing = 0, ktbg = 0, init_sBil = 0) %>%
+  idata_set(expand.idata(ksyn = ksyn_idata)) %>%
+  mrgsim(end = 60*60*24*30) %>% as_tibble() %>% filter(time == 2592000) %>%
+  cbind(ksyn_idata)
+
+ssscan = ggplot(data = ss) + geom_point(aes(x = ksyn_idata, y = TotalBilirubin)) + 
+  labs(title="basal bilirubin production scan", x ="bilirun synthesis rate (nmol.s-1)", y = "total bilirubin (nmol)") + 
+  geom_hline(yintercept=458, color = 'blue') + # bilirubin level in adult rat
+  geom_hline(yintercept=569, color = 'red') + # bilirubin level in juvenile rats
+  theme_bw()
+
+ggsave('img/steadystate.png', plot = ssscan, dpi = 300)
+
+```
+
+
+# Model comparison
+
+```{r}
+# read in observed data; dose = 0.3 mg/kg
+obs <- read.csv(file = 'data/Apgar2018.csv', header = TRUE)
+
+# setting up dosing; assuming dose = 0.3mg/kg
+mod1 <- mread("model1") %>% param(ktbg = 0, ksyn = 0.0016, moleweight_LNP = 1.5, init_sBil = 0) %>% init(Bil = 458)
+
+sim1 =  mod1 %>% mrgsim(end = 60*60*24*3) %>% as_tibble()
+
+plasmaRNA <- ggplot(data = sim1, aes(x = time/(60 * 60 * 24))) + geom_line(aes(y = LNP)) + 
+  geom_point(data = obs %>% filter(type == "plasma_mRNA") %>% filter(figure == "fig2upper"), aes(x = time_d, y = value), size = 4, alpha = 0.5, color = "blue") + 
+  scale_y_continuous(trans='log10', limits = c(1E-8, 1), name = 'LNP (nmol)') + xlab("time (day)") + theme_bw()
+
+# assuming rat liver = 5g
+liverRNA <- ggplot(data = sim1, aes(x = time/(60 * 60 * 24))) + geom_line(aes(y = mRNA/5)) + 
+  geom_point(data = obs %>% filter(type == "liver_mRNA") %>% filter(figure == "fig2upper"), aes(x = time_d, y = value), size = 4, alpha = 0.5, color = "blue") + 
+  scale_y_continuous(trans='log10', limits = c(1E-8, 1), name = 'mRNA per gram liver (nmol)') + xlab("time (day)") + theme_bw()
+
+bili <- ggplot(data = sim1, aes(x = time/(60 * 60 * 24))) + 
+  geom_line(aes(y = TotalBilirubin, color = 'Bil + MGT + DGT'), size = 2, linetype="longdash", alpha = 0.5) + 
+  geom_line(aes(y = TotalBilirubin + Bil_UGTc, color = 'Bil + MGT + DGT + Bil:UGTc')) + 
+  geom_point(data = obs %>% filter(type == "total_bilirubin") %>% filter(figure == "fig2upper"), 
+             aes(x = time_d, y = value), size = 4, alpha = 0.5, color = "blue") + 
+  theme_bw() + theme(legend.position = "bottom") + labs(color = "")  + 
+  scale_y_continuous(limits = c(0, 1000), name = 'bilirubin (nmol)') + xlab("time (day)") 
+
+enzyme <- ggplot(data = sim1, aes(x = time/(60 * 60 * 24))) + geom_line(aes(y = Enzyme)) + xlab("time (day)") + ylab('enzyme (nmol)') + theme_bw()
+
+grid.arrange(plasmaRNA, liverRNA, bili,  enzyme, ncol = 1)
+```

@@ -1,0 +1,192 @@
+---
+title: "Analysis on the LNP-mRNA model"
+author: "Yuezhe Li"
+date: "4/19/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup
+
+```{r pressure, echo=FALSE}
+rm(list = ls())
+gc()
+
+setwd(dirname(rstudioapi::getSourceEditorContext()$path)) # set the working directory at the folder that contains the script
+
+# load required packages
+library(tidyverse)
+library(mrgsolve)
+library(gridExtra)
+library(grid)
+library(mrggsave)
+library(sensitivity)
+library(PKPDmisc)
+library(mrgsim.parallel)
+
+# add volume
+Vextra = 3e-4 # extracellular compartment volume; unit L-1
+Vintra = 1.4e-12 # intracellular compartment volume; unit L-1
+
+# constant conversion
+Avogadro = 6.02e23
+
+# convert initial condition
+InitConv <- function(MolCount = 10, # unit: molecule count; output: nM
+                     Volume = Vintra, const = Avogadro){ return(MolCount/ Avogadro/ Vintra * 1e9) }
+
+init_default <- list(
+  E = 10,  # nM
+  R = 1e4, 
+  M = 100 
+)
+```
+
+
+```{r}
+pre <- mread("mihaila2017_v1") %>% mrgsim(delta = 0.5, end = 12) %>% as.tibble()
+
+ggplot(data = pre, aes(x = time, y = M)) + geom_line()
+```
+```{r}
+sim1 <- mread("mihaila2017_v1") %>%
+  init(init_default) %>%
+  mrgsim(delta = 0.1, end = 21) %>% as.tibble()
+
+ggplot(data = sim1, aes(x = time)) + 
+  geom_line(aes(y = M))
+```
+# v2 test
+
+This version of the model convert all the value based on copies/ molecular count. 
+
+
+```{r}
+init2 <- list(
+  E = 10,  # nM
+  R = 1e4, # copies 
+  M = 100 # copies
+)
+
+sim2 <- mread("mihaila2017_v2")  %>%
+  init(init2) %>%
+  mrgsim(delta = 1e-4, end = 21) %>% as.tibble()
+
+ggplot(data = sim2, aes(x = time)) + 
+  geom_line(aes(y = M))
+```
+
+# v3 test
+
+This version is more based on v1
+
+```{r}
+pre3 <- mread("mihaila2017_v3") %>% init(E = 0) %>% mrgsim(delta = 1e-4, end = 10) %>% as.tibble()
+
+ggplot(data = pre3, aes(x = time, y = RNAcount)) + geom_line()
+```
+
+```{r}
+# read in data from Mihaila et al., 2017
+s2p1 <- read.csv(file = "data/Mihaila2017_FigS2Panel1.csv", header = TRUE)
+
+init3 <- list(
+  E = 2.8e7,  # nM
+  R = InitConv(1e4), # nM 
+  M = InitConv(100) # nM
+)
+
+sim3 <- mread("mihaila2017_v3")  %>%
+  init(init3) %>%
+  mrgsim(delta = 1e-3, end = 21) %>% as.tibble()
+
+verification3 = ggplot(data = sim3, aes(x = time)) + 
+  geom_line(aes(y = RNAcount/sim3$RNAcount[1] * 100, col = 'simul')) + 
+  geom_point(data = s2p1, aes(y = RNA, col = 'Mihaila et al., 2017'), alpha = 0.5, size = 3) + 
+  labs(x = "time (h)", y = "% RNA expression", col = "") + ylim(c(0,100)) + theme_bw()
+
+verification3
+
+# ggsave(filename = "img/verification_s2p1.png", plot = verification3, width = 12, height = 4)
+```
+
+```{r}
+# read in data from Mihaila et al., 2017
+s2p1 <- read.csv(file = "data/Mihaila2017_FigS2Panel1.csv", header = TRUE)
+
+init32 <- list(
+  E = 10,  # nM
+  R = InitConv(1e4), # nM 
+  M = InitConv(100) # nM
+)
+
+sim32 <- mread("mihaila2017_v3")  %>%
+  init(init32) %>%
+  param(k1 = 0.005/3.6e-7) %>%
+  mrgsim(delta = 0.1, end = 21) %>% as.tibble()
+
+verification32 = ggplot(data = sim32, aes(x = time)) + 
+  geom_line(aes(y = RNAcount/sim32$RNAcount[1] * 100, col = 'simul')) + 
+  geom_point(data = s2p1, aes(y = RNA, col = 'Mihaila et al., 2017'), alpha = 0.5, size = 3) + 
+  labs(x = "time (h)", y = "% RNA expression", col = "") + ylim(c(0,100)) + theme_bw()
+
+verification32
+
+ggsave(filename = "img/verification_s2p1.png", plot = verification32, width = 12, height = 4)
+
+# save data for other verification
+write.csv(sim3 %>% select(time, N, S, M), file = 'data/JuliaValidation.csv', row.names = FALSE)
+```
+
+# v5 test 
+
+This version is based on v3. The only change is on mRNA equation. See script comments (line 51).
+
+```{r}
+s2p1 <- read.csv(file = "data/Mihaila2017_FigS2Panel1.csv", header = TRUE)
+
+init3 <- list(
+  E = 10,  # nM
+  R = InitConv(1e4), # nM 
+  M = InitConv(100) # nM
+)
+
+sim5 <- mread("mihaila2017_v5")  %>%
+  init(init3) %>%
+  param(k1 = 0.005/3.6e-7) %>%
+  mrgsim(delta = 0.1, end = 21) %>% as.tibble()
+
+verification5 <- ggplot(data = sim5, aes(x = time)) + 
+  geom_line(aes(y = RNAcount/sim5$RNAcount[1] * 100, col = 'simul')) + 
+  geom_point(data = s2p1, aes(y = RNA, col = 'Mihaila et al., 2017'), alpha = 0.5, size = 3) + 
+  labs(x = "time (h)", y = "% RNA expression", col = "") + ylim(c(0,100)) + theme_bw()
+
+verification5
+```
+
+# v4 test
+
+This version dropped divide all "L" in the units
+
+```{r}
+mread("mihaila2017_v4") %>% init(E = 0) %>% mrgsim(delta = 1e-4, end = 10) %>% plot(RNAcount ~ time)
+```
+
+```{r}
+init4 <- list(
+  E = 10,  # nM
+  R = InitConv(1e4), # nM 
+  M = InitConv(100) # nM
+)
+
+sim4 <- mread("mihaila2017_v4")  %>%
+  init(init4) %>%
+  mrgsim(delta = 1e-4, end = 21) %>% as.tibble()
+
+ggplot(data = sim4, aes(x = time)) + 
+  geom_line(aes(y = RNAcount))
+```
+

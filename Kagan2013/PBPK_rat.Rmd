@@ -1,0 +1,217 @@
+---
+title: "Analysis on the LNP-mRNA model"
+author: "Yuezhe Li"
+date: "4/19/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup
+
+```{r pressure, echo=FALSE}
+rm(list = ls())
+gc()
+
+setwd(dirname(rstudioapi::getSourceEditorContext()$path)) # set the working directory at the folder that contains the script
+
+# load required packages
+library(tidyverse)
+library(mrgsolve)
+library(gridExtra)
+library(grid)
+library(mrggsave)
+```
+# Observed data 
+
+```{r}
+# Fungizone; rat; dose = 0.8mg/kg
+fungizone_rat <- read.csv(file = 'data/Fig3b_dots.csv', header = TRUE)
+
+# AmBisome; rat; dose = 20mg/kg
+AmB_rat_nonlip <- read.csv(file = 'data/Fig3d_dots.csv', header = TRUE) %>% filter(type == "nonLIP") %>% select(time, conc)
+AmB_rat_tot <- read.csv(file = 'data/Fig3d_dots.csv', header = TRUE) %>% filter(type == "total") %>% select(time, conc)
+
+# AmBisome; rat; dose = 5mg/kg
+## predicted data, total AmB
+AmB_rat_plasma_tot <- read.csv(file = 'data/Fig5.csv', header = TRUE) %>% filter(type == "plasma, AmB, simul") 
+AmB_rat_liver_tot <- read.csv(file = 'data/Fig5.csv', header = TRUE) %>% filter(type == "liver, AmB, simul") 
+AmB_rat_kidney_tot <- read.csv(file = 'data/Fig5.csv', header = TRUE) %>% filter(type == "kidney, AmB, simul") 
+AmB_rat_heart_tot <- read.csv(file = 'data/Fig5.csv', header = TRUE) %>% filter(type == "heart, AmB, simul") 
+AmB_rat_spleen_tot <- read.csv(file = 'data/Fig5.csv', header = TRUE) %>% filter(type == "spleen, AmB, simul") 
+AmB_rat_lung_tot <- read.csv(file = 'data/Fig5.csv', header = TRUE) %>% filter(type == "lung, AmB, simul") 
+## predicted data, AmB in nonliposomal form
+AmB_rat_plasma_nonlip <- read.csv(file = 'data/Fig5.csv', header = TRUE) %>% filter(type == "plasma, nonLIP, simul") 
+AmB_rat_liver_nonlip <- read.csv(file = 'data/Fig5.csv', header = TRUE) %>% filter(type == "liver, nonLIP, simul") 
+AmB_rat_kidney_nonlip <- read.csv(file = 'data/Fig5.csv', header = TRUE) %>% filter(type == "kidney, nonLIP, simul") 
+AmB_rat_heart_nonlip <- read.csv(file = 'data/Fig5.csv', header = TRUE) %>% filter(type == "heart, nonLIP, simul") 
+AmB_rat_spleen_nonlip <- read.csv(file = 'data/Fig5.csv', header = TRUE) %>% filter(type == "spleen, nonLIP, simul") 
+AmB_rat_lung_nonlip <- read.csv(file = 'data/Fig5.csv', header = TRUE) %>% filter(type == "lung, nonLIP, simul") 
+## observed data, total AmB; note only plasma data is added
+AmB_rat_plasma_obs <- read.csv(file = 'data/Fig5.csv', header = TRUE) %>% filter(type == "plasma, AmB, obs") 
+```
+
+# Nonliposomal
+
+```{r}
+# read in PBPK model
+mod <- mread("Fungizone") 
+
+# simulation
+sim0 <- mod %>% param(dose = 0.8) %>% mrgsim(delta = 0.1, end = 96) %>% as.tibble()
+
+# plot
+rat_nonlip <- ggplot(data = sim0, aes(x = time)) + 
+  geom_line(aes(y = C_pl, col = "nonliposomal")) + 
+  geom_point(data = fungizone_rat, aes(y = conc, col = 'Gershkovich et al., 2009'), size = 2, alpha = 0.5) + 
+  labs(y = 'AmB conc (mg/L)', x = 'time (h)', color = ' ') + 
+  theme_bw() + # theme(legend.position = "bottom") + 
+  scale_y_continuous(trans='log10', limits = c(0.005, 10)) + 
+  scale_x_continuous(breaks = c(0, 24, 48, 72, 96), labels = c('0', '24', '48', '72', '96'))
+
+print(rat_nonlip)
+
+# save image
+ggsave("img/fungisome_valid_rat.png", plot = rat_nonlip, width = 8, height = 3, units = c("in"))
+```
+
+
+# Parameter calculation, liposomal uptake (??)
+```{r}
+# body weight, unit: kg
+wt_rat = 0.25
+wt_mouse = 24/1000
+
+b = 1
+
+# calculate liposomal uptake in tissue
+LIPparam <- list(
+    UPgi = 2.04e-4 * (wt_rat/wt_mouse)^b, 
+    UPsp = 5.95e-5 * (wt_rat/wt_mouse)^b,
+    UPli = 4.62e-4 * (wt_rat/wt_mouse)^b,
+    UPrm = 1.97e-5 * (wt_rat/wt_mouse)^b
+)
+
+K_lu = 6
+```
+
+# Liposomal
+```{r}
+# read in model
+mod1 <- mread("Kagan") %>% param(LIPparam)
+```
+
+## Dose = 5mg/kg, simulation
+```{r}
+# simulation
+sim2 <- mod1 %>% param(dose = 5) %>% mrgsim(delta = 0.1, dose = 5, end = 96) %>% as.tibble()
+
+rat_plasma_AmB2 <- ggplot(data = sim2, aes(x = time)) + 
+  geom_line(aes(y = C_pl, col = "nonliposomal")) + 
+  geom_line(aes(y = C_pl_LIP + C_pl, col = "AmB")) + 
+  geom_line(data = AmB_rat_plasma_tot, aes(x = time, y = conc, col = 'Kagan et al., total'), 
+            linetype = "dashed", size=1, alpha = 0.5) + 
+  geom_line(data = AmB_rat_plasma_nonlip, aes(x = time, y = conc, col = 'Kagan et al., nonliposomal'), 
+            linetype = "dotted", size=2, alpha = 0.5) + 
+  geom_point(data = AmB_rat_plasma_obs, aes(x = time, y = conc, col = "Gershkovich et al., 2009"), size = 3) + 
+  labs(y = 'AmB conc (mg/L)', x = 'time (h)', color = ' ') + 
+  theme_bw() + theme(legend.position = "bottom") +
+  scale_y_continuous(trans='log10', limits = c(0.01, 1000), breaks = c(0.01, 0.1, 1, 10, 100, 1000)) + 
+  scale_x_continuous(breaks = c(24, 48, 72, 96), limits = c(1,96)) + ggtitle("plasma")
+
+rat_heart_AmB2 <- ggplot(data = sim2, aes(x = time)) + 
+  geom_line(aes(y = C_ht, col = "nonliposomal")) + 
+  geom_line(aes(y = C_ht_vas_LIP + C_ht_exv_LIP + C_ht, col = "AmB")) + 
+  geom_line(data = AmB_rat_heart_tot, aes(x = time, y = conc, col = 'Kagan et al., total'), 
+            linetype = "dashed", size=1, alpha = 0.5) + 
+  geom_line(data = AmB_rat_heart_nonlip, aes(x = time, y = conc, col = 'Kagan et al., nonliposomal'), 
+            linetype = "dotted", size=2, alpha = 0.5) + 
+  labs(y = 'AmB conc (mg/L)', x = 'time (h)', color = ' ') + 
+  theme_bw() + theme(legend.position = "bottom") +
+  scale_y_continuous(trans='log10', limits = c(0.01, 100), breaks = c(0.01, 0.1, 1, 10, 100)) + 
+  scale_x_continuous(breaks = c(24, 48, 72, 96), limits = c(1,96)) + ggtitle("heart")
+
+rat_liver_AmB2 <- ggplot(data = sim2, aes(x = time)) + 
+  geom_line(aes(y = C_li, col = "nonliposomal")) + 
+  geom_line(aes(y = C_li_vas_LIP + C_li_exv_LIP + C_li, col = "AmB")) + 
+  geom_line(data = AmB_rat_liver_tot, aes(x = time, y = conc, col = 'Kagan et al., total'), 
+            linetype = "dashed", size=1, alpha = 0.5) + 
+  geom_line(data = AmB_rat_liver_nonlip, aes(x = time, y = conc, col = 'Kagan et al., nonliposomal'), 
+            linetype = "dotted", size=2, alpha = 0.5) + 
+  labs(y = 'AmB conc (mg/L)', x = 'time (h)', color = ' ') + 
+  theme_bw() + theme(legend.position = "bottom") +
+  scale_y_continuous(trans='log10', limits = c(1, 1000), breaks = c(1, 10, 100, 1000)) + 
+  scale_x_continuous(breaks = c(24, 48, 72, 96), limits = c(1,96)) + ggtitle("liver")
+
+rat_spleen_AmB2 <- ggplot(data = sim2, aes(x = time)) + 
+  geom_line(aes(y = C_sp_vas + C_sp_exv, col = "nonliposomal")) + 
+  geom_line(aes(y = C_sp_vas_LIP + C_sp_exv_LIP + C_sp_vas + C_sp_exv, col = "AmB")) + 
+  geom_line(data = AmB_rat_spleen_tot, aes(x = time, y = conc, col = 'Kagan et al., total'), 
+            linetype = "dashed", size=1, alpha = 0.5) + 
+  geom_line(data = AmB_rat_spleen_nonlip, aes(x = time, y = conc, col = 'Kagan et al., nonliposomal'), 
+            linetype = "dotted", size=2, alpha = 0.5) + 
+  labs(y = 'AmB conc (mg/L)', x = 'time (h)', color = ' ') + 
+  theme_bw() + theme(legend.position = "bottom") +
+  scale_y_continuous(trans='log10', limits = c(1, 1000), breaks = c(1, 10, 100, 1000)) + 
+  scale_x_continuous(breaks = c(24, 48, 72, 96), limits = c(1,96)) + ggtitle("spleen")
+
+rat_kidney_AmB2 <- ggplot(data = sim2, aes(x = time)) + 
+  geom_line(aes(y = C_kd_vas + C_kd_exv, col = "nonliposomal")) + 
+  geom_line(aes(y = C_kd_vas_LIP + C_kd_exv_LIP + C_kd_vas + C_kd_exv, col = "AmB")) + 
+  geom_line(data = AmB_rat_kidney_tot, aes(x = time, y = conc, col = 'Kagan et al., total'), 
+            linetype = "dashed", size=1, alpha = 0.5) + 
+  geom_line(data = AmB_rat_kidney_nonlip, aes(x = time, y = conc, col = 'Kagan et al., nonliposomal'), 
+            linetype = "dotted", size=2, alpha = 0.5) + 
+  labs(y = 'AmB conc (mg/L)', x = 'time (h)', color = ' ') + 
+  theme_bw() + theme(legend.position = "bottom") +
+  scale_y_continuous(trans='log10', limits = c(0.1, 100), breaks = c(0.1, 1, 10, 100)) + 
+  scale_x_continuous(breaks = c(24, 48, 72, 96), limits = c(1,96)) + ggtitle("kidney")
+
+rat_lung_AmB2 <- ggplot(data = sim2, aes(x = time)) + 
+  geom_line(aes(y = C_lu/K_lu, col = "nonliposomal")) + 
+  geom_line(aes(y = C_lu_vas_LIP + C_lu_exv_LIP + C_lu/K_lu, col = "AmB")) + 
+  geom_line(data = AmB_rat_lung_tot, aes(x = time, y = conc, col = 'Kagan et al., total'), 
+            linetype = "dashed", size=1, alpha = 0.5) + 
+  geom_line(data = AmB_rat_lung_nonlip, aes(x = time, y = conc, col = 'Kagan et al., nonliposomal'), 
+            linetype = "dotted", size=2, alpha = 0.5) + 
+  labs(y = 'AmB conc (mg/L)', x = 'time (h)', color = ' ') + 
+  theme_bw() + theme(legend.position = "bottom") +
+  scale_y_continuous(trans='log10', limits = c(0.1, 100), breaks = c(0.1, 1, 10, 100)) + 
+  scale_x_continuous(breaks = c(24, 48, 72, 96), limits = c(1,96)) + ggtitle("lung")
+
+#png('img/pbpk_LIP_rat.png', width = 2000, height = 400, res = 100)
+grid.arrange(rat_plasma_AmB2, rat_heart_AmB2, rat_liver_AmB2, rat_spleen_AmB2, rat_kidney_AmB2, rat_lung_AmB2, nrow = 2)
+#dev.off()
+```
+
+### save img
+```{r}
+png('img/pbpk_LIP_rat.png', width = 2400, height = 600, res = 100)
+grid.arrange(rat_plasma_AmB2, rat_heart_AmB2, rat_liver_AmB2, rat_spleen_AmB2, rat_kidney_AmB2, rat_lung_AmB2, nrow = 2)
+dev.off()
+```
+
+## Dose = 20mg/kg
+
+```{r}
+# simulation
+sim1 <- mod1 %>% mrgsim(delta = 0.1) %>% as.tibble()
+
+rat_AmB <- ggplot(data = sim1, aes(x = time)) + 
+  geom_line(aes(y = C_pl, col = "nonliposomal")) + 
+  geom_line(aes(y = C_pl + C_pl_LIP, col = "total")) + 
+  geom_point(data = AmB_rat_nonlip, aes(y = conc, col = 'Matsui et al., 2009, nonliposomal'), size = 2, alpha = 0.5) + 
+  geom_point(data = AmB_rat_tot, aes(y = conc, col = 'Matsui et al., 2009, total'), size = 2, alpha = 0.5) + 
+  labs(y = 'AmB conc (mg/L)', x = 'time (h)', color = ' ') + 
+  theme(legend.position = "bottom") + theme_bw() + 
+  scale_y_continuous(trans='log10', limits = c(0.05, 1000))
+
+
+print(rat_AmB)
+
+# save image
+ggsave("img/ambisome_valid_rat.png", plot = rat_AmB, width = 8, height = 3, units = c("in"))
+```
+

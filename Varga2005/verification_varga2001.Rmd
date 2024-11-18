@@ -1,0 +1,112 @@
+---
+title: "Analysis on the LNP-mRNA model"
+author: "Yuezhe Li"
+date: "4/19/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup
+
+```{r pressure, echo=FALSE}
+rm(list = ls())
+gc()
+
+setwd(dirname(rstudioapi::getSourceEditorContext()$path)) # set the working directory at the folder that contains the script
+
+# load required packages
+library(tidyverse)
+library(mrgsolve)
+library(gridExtra)
+library(grid)
+library(mrggsave)
+library(sensitivity)
+library(PKPDmisc)
+library(mrgsim.parallel)
+
+set.seed(88771) 
+```
+
+# Time-dependent internalization verification
+
+```{r}
+mod <- mread("varga_v1") 
+
+# test whether the exponential decrease is implemented sucessfully
+
+mod %>% mrgsim(end = 10, delta = 0.1) %>% plot(k_internalization + Complex_internal~time)
+```
+# Observed data
+
+```{r}
+fig4 <- read.csv(file = 'data/Varga2001FIG4.csv', header = TRUE)
+```
+
+# Simulation test
+
+The original version. 
+```{r}
+mod1 <- mread("varga_v1")
+
+sim_fig3_v1 <- mod1 %>% param(ComplexTotal = 9e4) %>%
+  mrgsim(end = 420, delta = 1) %>% as.tibble()
+
+plot1 <- ggplot(data = sim_fig3_v1, aes(x = time)) + 
+  geom_line(aes(y = total_plasmid_nuclear, col = "plasmid, nuclear")) + 
+  geom_line(aes(y = total_plasmid_cytoplasmic, col = "plasmid, cytosol")) + 
+  geom_line(aes(y = total_plasmid, col = "plasmid, total")) + 
+  geom_point(data = fig4 %>% filter(type == "nuclear"), aes(x = time, y = plasmid_number * 1e4, col = "Varga 2001, nuclear")) + 
+  geom_point(data = fig4 %>% filter(type == "cytoplasmic"), aes(x = time, y = plasmid_number * 1e4, col = "Varga 2001, cytoplasmic")) + 
+  geom_point(data = fig4 %>% filter(type == "total_plasmid"), aes(x = time, y = plasmid_number * 1e4, col = "Varga 2001, total plasmid")) + 
+  labs(x = 'time', y = "plasmid count", col = "") + theme_bw() + ggtitle('verification, v1')
+
+plot1
+```
+
+The version that excluded all vector dynamics in cell nucleus.
+```{r}
+mod2 <- mread("varga_v2") # nominal changes to the model
+
+sim_fig3_v2 <- mod2 %>% param(ComplexTotal = 9e4) %>%
+  mrgsim(end = 420, delta = 1) %>% as.tibble()
+
+plot2 <- ggplot(data = sim_fig3_v2, aes(x = time)) + 
+  geom_line(aes(y = total_plasmid_nuclear, col = "plasmid, nuclear")) + 
+  geom_line(aes(y = total_plasmid_cytoplasmic, col = "plasmid, cytosol")) + 
+  geom_line(aes(y = total_plasmid, col = "plasmid, total")) + 
+  geom_point(data = fig4 %>% filter(type == "nuclear"), aes(x = time, y = plasmid_number * 1e4, col = "Varga 2001, nuclear")) + 
+  geom_point(data = fig4 %>% filter(type == "cytoplasmic"), aes(x = time, y = plasmid_number * 1e4, col = "Varga 2001, cytoplasmic")) + 
+  geom_point(data = fig4 %>% filter(type == "total_plasmid"), aes(x = time, y = plasmid_number * 1e4, col = "Varga 2001, total plasmid")) + 
+  labs(x = 'time', y = "plasmid count", col = "") + theme_bw() + ggtitle('verification, v2')
+
+plot2
+```
+
+The version that added back all vector dynamics in cell nucleus.
+```{r}
+mod3 <- mread("varga_v3") # nominal changes to the model
+
+sim_fig3_v3 <- mod3 %>% param(ComplexTotal = 9e4) %>%
+  mrgsim(end = 420, delta = 1) %>% as.tibble()
+
+plot3 <- ggplot(data = sim_fig3_v3, aes(x = time)) + 
+  geom_line(aes(y = total_plasmid_nuclear, col = "plasmid, nuclear")) + 
+  geom_line(aes(y = total_plasmid_cytoplasmic, col = "plasmid, cytosol")) + 
+  geom_line(aes(y = total_plasmid, col = "plasmid, total")) + 
+  geom_point(data = fig4 %>% filter(type == "nuclear"), aes(x = time, y = plasmid_number * 1e4, col = "Varga 2001, nuclear")) + 
+  geom_point(data = fig4 %>% filter(type == "cytoplasmic"), aes(x = time, y = plasmid_number * 1e4, col = "Varga 2001, cytoplasmic")) + 
+  geom_point(data = fig4 %>% filter(type == "total_plasmid"), aes(x = time, y = plasmid_number * 1e4, col = "Varga 2001, total plasmid")) + 
+  labs(x = 'time', y = "plasmid count", col = "") + theme_bw() + ggtitle('verification, v3')
+
+plot3
+```
+
+save the result
+```{r}
+png('img/varga2001verification.png', width = 2000, height = 400, res = 100)
+grid.arrange(plot1, plot2, plot3, ncol = 3)
+dev.off()
+```

@@ -1,0 +1,325 @@
+---
+title: "Analysis on the LNP-mRNA model"
+author: "Yuezhe Li"
+date: "4/19/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Model set
+
+```{r pressure, echo=FALSE}
+rm(list = ls())
+gc()
+
+setwd(dirname(rstudioapi::getSourceEditorContext()$path)) # set the working directory at the folder that contains the script
+
+# load required packages
+library(tidyverse)
+library(mrgsolve)
+library(gridExtra)
+library(grid)
+library(mrggsave)
+library(sensitivity)
+library(PKPDmisc)
+library(mrgsim.parallel)
+
+set.seed(88771) 
+```
+
+# Test simulation
+
+```{r}
+mod <- mread("model2") 
+
+mod %>% param(dosing = 0.08, ktbg = 0) %>% mrgsim() %>% plot_sims(.f = LNP + mRNA + protein ~ time/(60*60*24))
+```
+
+# Global sensitivity analysis
+
+## mRNA
+
+use mRNA production as the readout
+
+```{r}
+mod <- mread("model2") %>% param(dosing = 0.08, ktbg = 0)
+
+# create sampling method
+gen_samples <- function(n, l, which = names(l), 
+                        factor = c(0.01,100), N = NULL) { # NEW ARGUMENT: N, the absolute sampling number per parameter
+  
+  vars <- tidyselect::vars_select(names(l), !!(enquo(which)))
+  
+  l <- as.list(l)[vars]
+  
+  l <- lapply(l, function(x) x*factor )
+  
+  if(is.numeric(N)) { # NEW
+    n <- N*2  
+  } else {
+    n <- length(l)*n*2
+  }
+  
+  df <- as.data.frame(l)
+  
+  len <- length(df)
+  
+  X <- matrix(ncol=len, nrow=n)
+  
+  colnames(X) <- names(df)
+  
+  Y <- X
+  
+  for(i in seq(len)){
+    r <- exp(runif(n, log(df[1,i]), log(df[2,i])))
+    X[,i] <- r
+    r <- exp(runif(n, log(df[1,i]), log(df[2,i])))
+    Y[,i] <- r
+  }
+  
+  return(list(x1 = as.data.frame(X), x2 = as.data.frame(Y)))
+}
+
+
+# set up simulation parameters for sobol2007 function
+simulationboot = 200 # number of simulation time in sobol2007
+sampleperparam = 100 # sampling size per parameter, for sobol2007
+
+setpk <- c('kw', 'k12', 'k21')
+setpd <- c('ka', 'ke','de' ,'kl', 'dmRNA')
+
+N <- sampleperparam * length(c(setpk,setpd))
+
+# set different variation in each group
+sets <- list(
+  list(which = setpk, factor = c(0.5, 1.5), N = N, l = param(mod)), 
+  list(which = setpd, factor = c(0.01,100), N = N, l = param(mod))
+)
+
+samps <- map(sets, do.call, what = gen_samples)
+samp <- map(c(1,2), ~ map_dfc(samps, .x))
+
+
+batch_mRNA <- function(x) {
+    mod %>% 
+    idata_set(x) %>%
+    mrgsim(obsonly = TRUE) %>% 
+    group_by(ID) %>% 
+    summarise(pexp = auc_partial(time, mRNA)) %>% 
+    pull(pexp)
+}
+
+# warning: the following line takes several minutes to run
+# pglobal = sobol2007(batch_mRNA, X1=samp[[1]], X2=samp[[2]], nboot=simulationboot)
+# plot(pglobal)
+# lines(c(0,11), c(0.05, 0.05), type="l", lty = 2)
+# save a minimal set of the Sobol analysis data
+# that is sufficient for visualization
+sobolx <- list(S = pglobal$S , T = pglobal$T)
+saveRDS(sobolx, file = "data/Sobol_mRNA.rds")
+```
+
+Plot the global sensitivity analysis, mRNA
+
+```{r}
+x <- readRDS("data/Sobol_mRNA.rds")
+
+setpk <- c('kw', 'k12', 'k21')
+setpd <- c('ka', 'ke','de' ,'kl', 'dmRNA')
+
+### plot
+globSens_mRNA <- tibble(Parameter = c(setpk,setpd),
+                   main = x$S$original,
+                   main_lo = x$S$'min. c.i.',
+                   main_hi = x$S$'max. c.i.',
+                   total = x$T$original,
+                   total_lo = x$T$'min. c.i.',
+                   total_hi = x$T$'max. c.i.') %>%
+  gather(effect, Index, -Parameter, -main_lo, -main_hi, -total_lo, -total_hi) %>%
+  mutate(lo = ifelse(effect == "main", main_lo, total_lo),
+         hi = ifelse(effect == "main", main_hi, total_hi),
+         Effect = factor(effect))
+
+fig_sens_glob_mRNA <- ggplot(data=globSens_mRNA, aes(x=Parameter, y=Index, group=Effect, col=Effect)) +
+  geom_point(position = position_dodge(width=0.3)) +
+  geom_errorbar(aes(ymax=hi, ymin=lo), position=position_dodge(width=0.3), width=0) +
+  theme_bw() +
+  geom_hline(aes(yintercept=0.05), lty=2) +
+  theme(legend.title = element_text(size = 15), legend.text=element_text(size=12)) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 12)) + 
+  ggtitle('Global sensitivity analysis, use mRNA as a read out')
+
+
+print(fig_sens_glob_mRNA)
+
+ggsave(filename = 'img/GlobalSens_mRNA.png', plot = fig_sens_glob_mRNA, height = 3, width = 8, units = c('in'), dpi = 300)
+```
+
+## Protein
+
+Use protein expression as a readout. Focus on the mRNA-protein dynamics.
+
+```{r}
+mod <- mread("model2") %>% param(dosing = 0.08, ktbg = 0)
+
+# set up simulation parameters for sobol2007 function
+simulationboot = 800 # number of simulation time in sobol2007
+sampleperparam = 250 # sampling size per parameter, for sobol2007
+
+setprotein <- c('ka', 'ke','de' ,'kl', 'dmRNA', 'kt', 'dUGTc')
+
+N <- sampleperparam * length(setprotein)
+
+# set different variation in each group
+setp <- list(
+  list(which = setprotein, factor = c(0.05,20), N = N, l = param(mod))
+)
+
+samps <- map(setp, do.call, what = gen_samples)
+samp <- map(c(1,2), ~ map_dfc(samps, .x))
+
+
+batch_protein <- function(x) {
+    mod %>% 
+    idata_set(x) %>%
+    mrgsim(obsonly = TRUE) %>% 
+    group_by(ID) %>% 
+    summarise(pexp = auc_partial(time, protein)) %>% 
+    pull(pexp)
+}
+
+# warning: the following line takes several minutes to run
+pglobal = sobol2007(batch_protein, X1=samp[[1]], X2=samp[[2]], nboot=simulationboot)
+plot(pglobal)
+# lines(c(0,11), c(0.05, 0.05), type="l", lty = 2)
+# save a minimal set of the Sobol analysis data
+# that is sufficient for visualization
+sobolx <- list(S = pglobal$S , T = pglobal$T)
+saveRDS(sobolx, file = "data/Sobol_protein.rds")
+```
+Plot the global sensitivity analysis, protein
+
+```{r}
+x <- readRDS("data/Sobol_protein.rds")
+
+setprotein <- c('ka', 'ke','de' ,'kl', 'dmRNA', 'kt', 'dUGTc')
+
+### plot
+globSens_protein <- tibble(Parameter = setprotein,
+                   main = x$S$original,
+                   main_lo = x$S$'min. c.i.',
+                   main_hi = x$S$'max. c.i.',
+                   total = x$T$original,
+                   total_lo = x$T$'min. c.i.',
+                   total_hi = x$T$'max. c.i.') %>%
+  gather(effect, Index, -Parameter, -main_lo, -main_hi, -total_lo, -total_hi) %>%
+  mutate(lo = ifelse(effect == "main", main_lo, total_lo),
+         hi = ifelse(effect == "main", main_hi, total_hi),
+         Effect = factor(effect))
+
+fig_sens_glob_protein <- ggplot(data=globSens_protein, aes(x=Parameter, y=Index, group=Effect, col=Effect)) +
+  geom_point(position = position_dodge(width=0.3)) +
+  geom_errorbar(aes(ymax=hi, ymin=lo), position=position_dodge(width=0.3), width=0) +
+  theme_bw() +
+  geom_hline(aes(yintercept=0.05), lty=2) +
+  theme(legend.title = element_text(size = 15), legend.text=element_text(size=12)) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 12)) + 
+  ggtitle('Global sensitivity analysis, use protein as a read out')
+
+
+print(fig_sens_glob_protein)
+
+ggsave(filename = 'img/GlobalSens_protein.png', plot = fig_sens_glob_protein, height = 3, width = 8, units = c('in'), dpi = 300)
+```
+
+# Local Sensitivity Analysis
+
+## LNP attachment rate
+
+```{r}
+idata <- expand.idata(ka = c(1E-6, 1E-5, 5E-5, 1E-4))
+
+out <- mod <- mread("model2") %>% param(dosing = 0.08, ktbg = 0) %>% 
+  idata_set(idata) %>% mrgsim(end = 60*60*24*7) %>% as.tibble() %>%
+  mutate(time =  time / (60*60*24) ) 
+
+ka_protein <- ggplot(data = out, aes(x = time, y = protein, col = as.factor(ID) ) ) + geom_line() + 
+  scale_colour_discrete( breaks=c(1,2,3,4), labels=c("ka=1E-6", "ka=1E-5", "ka=5E-5", "ka=1E-4")) + 
+  theme_bw() + theme(legend.title = element_blank(), legend.position="bottom") + 
+  labs(x = "time (day)", y = "protein (nmol)", title = "Parameter scan, LNP attachment rate")
+
+
+ka_mrna <- ggplot(data = out, aes(x = time, y = mRNA, col = as.factor(ID) ) ) + geom_line() + 
+  scale_colour_discrete( breaks=c(1,2,3,4), labels=c("ka=1E-6", "ka=1E-5", "ka=5E-5", "ka=1E-4")) + 
+  theme_bw() + theme(legend.title = element_blank(), legend.position="bottom") + 
+  labs(x = "time (day)", y = "mRNA (nmol)", title = "Parameter scan, LNP attachment rate") 
+
+png('img/localsens_ka.png', width = 12, height = 3, unit = "in", res = 300)
+grid.arrange(ka_mrna, ka_protein, ncol = 2)
+dev.off()
+```
+
+
+## LNP degredation rate in endosome
+
+```{r}
+idata <- expand.idata(de = c(1E-5, 1E-4, 1E-3))
+
+out <- mod <- mread("model2") %>% param(dosing = 0.08, ktbg = 0) %>% 
+  idata_set(idata) %>% mrgsim(end = 60*60*24*7) %>% as.tibble() %>%
+  mutate(time =  time / (60*60*24) ) 
+
+de_protein <- ggplot(data = out, aes(x = time, y = protein, col = as.factor(ID) ) ) + geom_line() + 
+  scale_colour_discrete( breaks=c(1,2,3), labels=c("de=1E-5", "de=1E-4", "de=1E-3")) + 
+  theme_bw() + theme(legend.title = element_blank(), legend.position="bottom") + 
+  labs(x = "time (day)", y = "protein (nmol)", title = "Parameter scan, LNP endosomal degradation rate")
+
+
+de_mrna <- ggplot(data = out, aes(x = time, y = mRNA, col = as.factor(ID) ) ) + geom_line() + 
+  scale_colour_discrete( breaks=c(1,2,3), labels=c("de=1E-5", "de=1E-4", "de=1E-3")) + 
+  theme_bw() + theme(legend.title = element_blank(), legend.position="bottom") + 
+  labs(x = "time (day)", y = "mRNA (nmol)", title = "Parameter scan, LNP endosomal degradation rate") 
+
+png('img/localsens_de.png', width = 12, height = 3, unit = "in", res = 300)
+grid.arrange(de_mrna, de_protein, ncol = 2)
+dev.off()
+
+```
+
+
+## change protein translation rate
+```{r}
+idata <- expand.idata(kt = c(10, 17, 34, 100))
+
+out <- mod <- mread("model2") %>% param(dosing = 0.08, ktbg = 0) %>% idata_set(idata) %>% mrgsim(end = 60*60*24*7) %>% as.tibble() %>%
+  mutate(time =  time / (60*60*24) ) 
+
+ktscan <- ggplot(data = out, aes(x = time, y = protein, col = as.factor(ID) ) ) + geom_line() + theme_bw() + 
+  scale_colour_discrete( breaks=c(1,2,3,4), labels=c("kt=10", "kt=17", "kt=34", "kt=100")) + theme(legend.title = element_blank()) + 
+  labs(x = "time (day)", y = "protein (nmol)", title = "Parameter scan, translation rate") 
+
+
+ggsave(filename = 'img/localsens_protein_kt.png', plot = ktscan, height = 3, width = 10, units = c('in'), dpi = 300)
+
+```
+
+## protein degredation rate
+
+```{r}
+idata <- expand.idata(dUGTc = c(5E-7, 1E-6, 5E-6, 2E-5))
+
+out <- mod <- mread("model2") %>% param(dosing = 0.08, ktbg = 0) %>% idata_set(idata) %>% mrgsim(end = 60*60*24*21) %>% as.tibble() %>%
+  mutate(time =  time / (60*60*24) ) 
+
+dUGTc_scan <- ggplot(data = out, aes(x = time, y = protein, col = as.factor(ID) ) ) + geom_line() + theme_bw() + 
+  scale_colour_discrete( breaks=c(1,2,3,4), labels=c("dUGTc=5E-7", "dUGTc=1E-6", "dUGTc=5E-6", "dUGTc=2E-5")) + 
+  theme(legend.title = element_blank()) + 
+  labs(x = "time (day)", y = "protein (nmol)", title = "Parameter scan, protein degradation rate") 
+
+
+ggsave(filename = 'img/localsens_protein_dUTGc.png', plot = dUGTc_scan, height = 3, width = 10, units = c('in'), dpi = 300)
+
+```

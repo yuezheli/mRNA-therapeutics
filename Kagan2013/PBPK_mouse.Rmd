@@ -1,0 +1,180 @@
+---
+title: "Analysis on the LNP-mRNA model"
+author: "Yuezhe Li"
+date: "4/19/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup
+
+```{r pressure, echo=FALSE}
+rm(list = ls())
+gc()
+
+setwd(dirname(rstudioapi::getSourceEditorContext()$path)) # set the working directory at the folder that contains the script
+
+# load required packages
+library(tidyverse)
+library(mrgsolve)
+library(gridExtra)
+library(grid)
+library(mrggsave)
+```
+# Observed data 
+
+```{r}
+mus_data <- read.csv(file = 'data/Fig4a.csv', header = TRUE)
+
+mus_simul_plasma_amb <- mus_data %>% filter(type == "AmB, plasma, simul")
+mus_simul_plasma_nonlip <- mus_data %>% filter(type == "nonLIP, plasma, simul")
+
+mus_simul_liver_amb <- mus_data %>% filter(type == "AmB, liver, simul")
+mus_simul_liver_nonlip <- mus_data %>% filter(type == "nonLIP, liver, simul")
+
+mus_simul_kidney_amb <- mus_data %>% filter(type == "AmB, kidney, simul")
+mus_simul_kidney_nonlip <- mus_data %>% filter(type == "nonLIP, kidney, simul")
+
+mus_simul_spleen_amb <- mus_data %>% filter(type == "AmB, spleen, simul")
+mus_simul_spleen_nonlip <- mus_data %>% filter(type == "nonLIP, spleen, simul")
+
+mus_simul_lung_amb <- mus_data %>% filter(type == "AmB, lung, simul")
+mus_simul_lung_nonlip <- mus_data %>% filter(type == "nonLIP, lung, simul")
+```
+
+# Parameter update
+```{r}
+wt_mus = 24/1000
+wt_rat = 250/1000
+
+# change parameters to fit mouse physiology
+
+MusParam <- list(
+  # cardiac output
+  Qco = (100-45)/100 * 14.1 * (24/1000)^0.75, # mouse hematocrit value from https://pubmed.ncbi.nlm.nih.gov/26107632/
+  # body weight for mouse 
+  wt = wt_mus, 
+  # fraction of unbound drug
+  f_u_pl = 0.074, 
+  # fraction of flows compared to cardiac output
+  q_frac_li = 16.1/100,
+  q_frac_kd = 9.1/100,
+  q_frac_sp = 1.125/100,
+  q_frac_gi = 12.87/100,
+  q_frac_ht = 6.6/100,
+  # tissue volume, percentage of bodyweight
+  v_frac_li = 5.49/100,
+  v_frac_kd = 1.67/100,
+  v_frac_sp = 0.35/100,
+  v_frac_gi = 4.22/100,
+  v_frac_ht = 0.5/100,
+  v_frac_lu = 0.73/100,
+  v_frac_blood = 4.9/100, # value from https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4243854/
+  # fraction of vascular space
+  vs_frac_li = 21/100,
+  vs_frac_kd = 24/100,
+  vs_frac_sp = 17/100,
+  vs_frac_gi = 19/100,
+  vs_frac_ht = 26/100,
+  vs_frac_lu = 50/100,
+  vs_frac_mu = 4/100,
+  vs_frac_rm = 4/100,
+  # immediately release drug fraction
+  # FR = ??,
+  # clearance value scaled from rats
+  CL_li = 6e-2 * (wt_mus/ wt_rat),
+  CL_kd = 1e-1 * (wt_mus/ wt_rat),
+  CL_rm = 1.58e-1 * (wt_mus/ wt_rat),
+  # PS value scaled from rats
+  PSkd = 7.5e-2 * (wt_mus/ wt_rat)^0.67, 
+  PSsp = 5.98e-1 * (wt_mus/ wt_rat)^0.67, 
+  PSrm = 5.47e-1 * (wt_mus/ wt_rat)^0.67
+)
+
+K_lu = 6
+```
+
+# Simulation
+```{r}
+# read in model
+mod1 <- mread("Kagan") %>% param(MusParam)
+
+# note FR is a guessed number
+test1 <- mod1 %>% param(FR = 16, dose = 5) %>% mrgsim(delta = 0.1) %>% as.tibble() %>% filter(time > 0.5)
+
+```
+# Plot data
+```{r}
+mus_AmB_plasma <- ggplot(data = test1, aes(x = time)) + 
+  geom_line(aes(y = C_pl, col = "nonliposomal")) + 
+  geom_line(aes(y = C_pl + C_pl_LIP, col = "total")) + 
+  geom_point(data = mus_simul_plasma_nonlip, aes(y = conc, col = 'Kagan et al., 2013, nonliposomal'), size = 2, alpha = 0.5) + 
+  geom_point(data = mus_simul_plasma_amb, aes(y = conc, col = 'Kagan et al., 2013, total'), size = 2, alpha = 0.5) + 
+  labs(y = 'AmB conc (mg/L)', x = 'time (h)', color = ' ') + 
+  theme_bw() +
+  scale_x_continuous(breaks = c(0, 4, 8, 12, 16, 20, 24)) + 
+  scale_y_continuous(trans='log10', limits = c(0.01, 1000), 
+                     breaks = c(0.01, 0.1, 1, 10, 100, 1000), 
+                     labels = c('0.01', '0.1', '1', '10', '100', '1000')) + ggtitle("Plasma")
+
+mus_AmB_liver <- ggplot(data = test1, aes(x = time)) + 
+  geom_line(aes(y = C_li, col = "nonliposomal")) + 
+  geom_line(aes(y = C_li + C_li_exv_LIP, col = "total")) + 
+  geom_point(data = mus_simul_liver_nonlip, aes(y = conc, col = 'Kagan et al., 2013, nonliposomal'), size = 2, alpha = 0.5) + 
+  geom_point(data = mus_simul_liver_amb, aes(y = conc, col = 'Kagan et al., 2013, total'), size = 2, alpha = 0.5) + 
+  labs(y = 'AmB conc (mg/L)', x = 'time (h)', color = ' ') + 
+  theme_bw() +
+  scale_x_continuous(breaks = c(0, 4, 8, 12, 16, 20, 24)) + 
+  scale_y_continuous(trans='log10', limits = c(1, 1000), 
+                     breaks = c(1, 10, 100, 1000), 
+                     labels = c('1', '10', '100', '1000'))  + ggtitle("Liver")
+
+mus_AmB_kidney <- ggplot(data = test1, aes(x = time)) + 
+  geom_line(aes(y = C_kd_vas + C_kd_exv, col = "nonliposomal")) + 
+  geom_line(aes(y = C_kd_vas + C_kd_exv + C_kd_vas_LIP, col = "total")) + 
+  geom_point(data = mus_simul_kidney_nonlip, aes(y = conc, col = 'Kagan et al., 2013, nonliposomal'), size = 2, alpha = 0.5) + 
+  geom_point(data = mus_simul_kidney_amb, aes(y = conc, col = 'Kagan et al., 2013, total'), size = 2, alpha = 0.5) + 
+  labs(y = 'AmB conc (mg/L)', x = 'time (h)', color = ' ') + 
+  theme_bw() +
+  scale_x_continuous(breaks = c(0, 4, 8, 12, 16, 20, 24)) + 
+  scale_y_continuous(trans='log10', limits = c(1, 100), 
+                     breaks = c(1, 10, 100), 
+                     labels = c('1', '10', '100'))  + ggtitle("Kidney")
+
+mus_AmB_spleen <- ggplot(data = test1, aes(x = time)) + 
+  geom_line(aes(y = C_sp_vas + C_sp_exv, col = "nonliposomal")) + 
+  geom_line(aes(y = C_sp_vas + C_sp_exv + C_sp_exv_LIP, col = "total")) + 
+  geom_point(data = mus_simul_spleen_nonlip, aes(y = conc, col = 'Kagan et al., 2013, nonliposomal'), size = 2, alpha = 0.5) + 
+  geom_point(data = mus_simul_spleen_amb, aes(y = conc, col = 'Kagan et al., 2013, total'), size = 2, alpha = 0.5) + 
+  labs(y = 'AmB conc (mg/L)', x = 'time (h)', color = ' ') + 
+  theme_bw() + 
+  scale_x_continuous(breaks = c(0, 4, 8, 12, 16, 20, 24)) + 
+  scale_y_continuous(trans='log10', limits = c(1, 1000), 
+                     breaks = c(1, 10, 100, 1000), 
+                     labels = c('1', '10', '100', '1000'))  + ggtitle("Spleen")
+
+mus_AmB_lung <- ggplot(data = test1, aes(x = time)) + 
+  geom_line(aes(y = C_lu/K_lu, col = "nonliposomal")) + 
+  geom_line(aes(y = C_lu/K_lu + C_lu_vas_LIP + C_lu_exv_LIP, col = "total")) + 
+  geom_point(data = mus_simul_lung_nonlip, aes(y = conc, col = 'Kagan et al., 2013, nonliposomal'), size = 2, alpha = 0.5) + 
+  geom_point(data = mus_simul_lung_amb, aes(y = conc, col = 'Kagan et al., 2013, total'), size = 2, alpha = 0.5) + 
+  labs(y = 'AmB conc (mg/L)', x = 'time (h)', color = ' ') + 
+  theme_bw() +
+  scale_x_continuous(breaks = c(0, 4, 8, 12, 16, 20, 24)) + 
+  scale_y_continuous(trans='log10', limits = c(0.1, 100), 
+                     breaks = c(0.1, 1, 10, 100), 
+                     labels = c('0.1', '1', '10', '100'))  + ggtitle("Lung")
+
+
+grid.arrange(mus_AmB_plasma, mus_AmB_liver, mus_AmB_spleen, mus_AmB_kidney, mus_AmB_lung, ncol = 1)
+```
+# save plot 
+```{r}
+png('img/pbpk_LIP_mouse.png', width = 800, height = 800, res = 100)
+grid.arrange(mus_AmB_plasma, mus_AmB_liver, mus_AmB_spleen, mus_AmB_kidney, mus_AmB_lung, ncol = 1)
+dev.off()
+```
+

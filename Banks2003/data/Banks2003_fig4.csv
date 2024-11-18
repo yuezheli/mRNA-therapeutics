@@ -1,0 +1,12 @@
+time,value,type
+2.01,2.40985E+11,medium
+3.99,2.40973E+11,medium
+5.9,2.40967E+11,medium
+8.02,2.40962E+11,medium
+0.05,344827.59,cytosol
+1.99,15862068.97,cytosol
+3.98,22068965.52,cytosol
+7.96,26206896.55,cytosol
+1.96,3122332.39,nucleus
+3.97,7200078.8,nucleus
+7.99,12807800.91,nucleus

@@ -1,0 +1,62 @@
+---
+title: "Analysis on the LNP-mRNA model"
+author: "Yuezhe Li"
+date: "4/19/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup
+
+```{r pressure, echo=FALSE}
+rm(list = ls())
+gc()
+
+setwd(dirname(rstudioapi::getSourceEditorContext()$path)) # set the working directory at the folder that contains the script
+
+# load required packages
+library(tidyverse)
+library(mrgsolve)
+library(gridExtra)
+library(grid)
+library(mrggsave)
+library(sensitivity)
+library(PKPDmisc)
+library(mrgsim.parallel)
+
+set.seed(88771) 
+```
+
+# Time-dependent internalization verification
+
+```{r}
+mod <- mread("varga2005") %>% init(Complex_extracellular = 5e4)
+
+mod %>% mrgsim(end = 250, delta = 0.1) %>% plot(total_plasmid_nuclear + total_plasmid ~time)
+```
+# Observed data
+
+```{r}
+ad5 <- read.csv(file = 'data/varga2005Fig3_Ad5.csv', header = TRUE)
+```
+
+# Simulation 
+
+```{r}
+sim0 <- mod %>% init(Complex_extracellular = 1e4) %>%
+                mrgsim(end = 250, delta = 0.1) %>% as.tibble()
+
+plot_ad5 <- ggplot(data = sim0, aes(x = time)) + 
+  geom_line(aes(y = total_plasmid_nuclear, col = "nuclear plasmid")) + 
+  geom_line(aes(y = total_plasmid, col = "total plasmid")) + 
+  geom_point(data = ad5 %>% filter(type == "nuclear"), aes(y = plasmid, col = "nuclear, Ad5")) + 
+  geom_point(data = ad5 %>% filter(type == "total"), aes(y = plasmid, col = "total, Ad5")) + 
+  labs(x = "time (min)", y = "plasmid count", col = "") + theme_bw() + ggtitle("Ad5 verification")
+
+plot_ad5
+
+ggsave(filename = 'img/varga2005_ad5_verification.png', plot = plot_ad5, width = 6, height = 3, units = "in")
+```
